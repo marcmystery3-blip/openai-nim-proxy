@@ -213,23 +213,53 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 
   } catch (error) {
-    // Log the FULL error from NVIDIA, not just the status code
-    console.error('Proxy error status:', error.response?.status);
-    console.error('Proxy error data:', JSON.stringify(error.response?.data, null, 2));
+    const status = error.response?.status;
+    let errorBody = null;
+
+    try {
+      const data = error.response?.data;
+      if (data && (typeof data.pipe === 'function' || typeof data.on === 'function')) {
+        // The error response came back as a stream (happens when our own
+        // request used stream:true). Buffer it safely instead of JSON.stringify-ing
+        // the stream object itself (which contains circular socket references).
+        errorBody = await new Promise((resolve) => {
+          let raw = '';
+          data.on('data', (chunk) => { raw += chunk.toString(); });
+          data.on('end', () => resolve(raw));
+          data.on('error', () => resolve(null));
+        });
+      } else if (data) {
+        errorBody = data;
+      }
+    } catch (readErr) {
+      errorBody = null;
+    }
+
+    console.error('Proxy error status:', status);
+    console.error('Proxy error data:', errorBody);
     console.error('Model requested:', req.body?.model);
 
-    const nvidiaMessage = error.response?.data?.error?.message
-      || error.response?.data?.message
-      || error.message
-      || 'Internal server error';
-
-    res.status(error.response?.status || 500).json({
-      error: {
-        message: nvidiaMessage,
-        type: 'invalid_request_error',
-        code: error.response?.status || 500
+    let nvidiaMessage = error.message || 'Internal server error';
+    if (errorBody) {
+      try {
+        const parsed = typeof errorBody === 'string' ? JSON.parse(errorBody) : errorBody;
+        nvidiaMessage = parsed?.error?.message || parsed?.message || nvidiaMessage;
+      } catch (parseErr) {
+        if (typeof errorBody === 'string' && errorBody.length) {
+          nvidiaMessage = errorBody;
+        }
       }
-    });
+    }
+
+    if (!res.headersSent) {
+      res.status(status || 500).json({
+        error: {
+          message: nvidiaMessage,
+          type: 'invalid_request_error',
+          code: status || 500
+        }
+      });
+    }
   }
 });
 
