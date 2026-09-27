@@ -88,11 +88,16 @@ app.post('/v1/chat/completions', async (req, res) => {
       }
     }
 
+    // Clamp temperature to the 0.0–1.0 range some NIM models require,
+    // regardless of what the client (Janitor) sends.
+    let safeTemperature = (typeof temperature === 'number') ? temperature : 0.6;
+    safeTemperature = Math.min(Math.max(safeTemperature, 0), 1);
+
     // Transform OpenAI request to NIM format
     const nimRequest = {
       model: nimModel,
       messages: messages,
-      temperature: temperature || 0.6,
+      temperature: safeTemperature,
       max_tokens: max_tokens || 9024,
       extra_body: ENABLE_THINKING_MODE ? { chat_template_kwargs: { thinking: true } } : undefined,
       stream: stream || false
